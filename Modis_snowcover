@@ -1,0 +1,77 @@
+// Use Map.centerObject to center the map on the drawn geometry
+Map.centerObject(geometry);
+
+// Extract coordinates of the drawn polygon
+var coordinates = ee.Geometry(geometry).coordinates();
+
+// Create an ee.Geometry.Polygon from the coordinates
+var drawnPolygon = ee.Geometry.Polygon(coordinates);
+
+// Calculate the area of the drawn polygon in square meters
+var polygonArea = drawnPolygon.area();
+
+// Print the area of the drawn polygon
+print("Area of the Drawn Polygon:", polygonArea);
+
+// Define the MODIS snow cover ImageCollection
+var modisSnowCover = ee.ImageCollection("MODIS/061/MOD10A1")
+  .filterDate("2022-01-01", "2022-12-31")
+  .select("NDSI_Snow_Cover");
+
+// Function to calculate the percentage of snow-covered area
+var calculatePercentage = function(image) {
+  // Threshold NDSI to identify snow-covered pixels
+  var snowCover = image.select("NDSI_Snow_Cover").gte(50);
+  
+  // Calculate the area of snow cover in square meters
+  var area = snowCover.multiply(ee.Image.pixelArea());
+  
+  // Sum the snow-covered area for the region
+  var snowArea = area.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: drawnPolygon,
+    scale: 500,
+    maxPixels: 1e13
+  });
+
+  // Calculate the percentage of snow-covered area
+  var percentageSnowArea = ee.Number(snowArea.get("NDSI_Snow_Cover")).divide(polygonArea).multiply(100);
+
+  // Add the date, percentage of snow area, and polygon area to the result
+  return ee.Feature(null, {
+    date: image.date(),
+    percentageSnowArea: percentageSnowArea,
+    polygonArea: polygonArea
+  });
+};
+
+// Map the calculatePercentage function over the ImageCollection
+var percentageSnowAreaCollection = modisSnowCover.map(calculatePercentage);
+
+// Export the results to a CSV file in Google Drive
+Export.table.toDrive({
+  collection: percentageSnowAreaCollection,
+  description: 'SnowPercentage_2022',
+  folder: 'jilsneeuw', // Specify your folder name
+  fileNamePrefix: 'SnowPercentage_2022',
+  fileFormat: 'CSV'
+});
+
+// Find the feature with the maximum percentage of snow area
+var maxPercentageFeature = percentageSnowAreaCollection
+  .sort("percentageSnowArea", false)
+  .first();
+
+// Get the date with the maximum percentage of snow area
+var maxPercentageDate = ee.Date(maxPercentageFeature.get("date"));
+
+// Display the image for the day with the highest percentage of snow
+var maxPercentageImage = modisSnowCover
+  .filterDate(maxPercentageDate, maxPercentageDate.advance(1, "day"))
+  .first();
+
+Map.addLayer(maxPercentageImage, {bands: "NDSI_Snow_Cover", min: 0, max: 100, palette: ["blue", "white"]}, "Max Snow Percentage Day");
+
+// Print the result
+print("Date with Max Snow Percentage Area:", maxPercentageDate.format("YYYY-MM-dd"));
+print("Max Snow Percentage Area (%):", maxPercentageFeature.get("percentageSnowArea"));
